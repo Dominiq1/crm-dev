@@ -199,11 +199,12 @@ const LeadSchema = new mongoose.Schema({
       ref: "Tag",
     },
   ],
-  category: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: "Category",
-  },
-
+  categories: [
+    {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Category",
+    },
+  ],
   createdAt: {
     type: Date,
     default: new Date(),
@@ -290,8 +291,9 @@ LeadSchema.pre("save", function (next) {
 LeadSchema.pre("save", function (next) {
   if (this.Birthday) {
     this.Birthday = new Date(this.Birthday);
-  }
+  } 
   next();
 });
+
 
 module.exports = mongoose.model("Lead", LeadSchema);
