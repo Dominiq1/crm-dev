@@ -37,7 +37,7 @@ function fDateTime(date, newFormat) {
 }
 
 const TwilioMSGType = new GraphQLObjectType({
-  name: "TwilioMSG",
+  name:  "TwilioMSG", 
   fields: () => ({
     accountSid: { type: GraphQLID },
     id: { type: GraphQLID },
@@ -289,17 +289,16 @@ const LeadType = new GraphQLObjectType({
     Birthday: { type: GraphQLString },
     HomeClosingDate: { type: GraphQLString },
     updatedAt: { type: GraphQLString },
-    category: {
-      type: CategoryType,
-      resolve(parent, args) {
-        return Category.findById(parent.category);
-      },
-    },
-
     tags: {
       type: new GraphQLList(TagType),
       resolve(parent, args) {
         return Tag.find({ _id: { $in: parent.tags } });
+      },
+    },
+    categories: {
+      type: new GraphQLList(CategoryType),
+      resolve(parent, args) {
+        return Category.find({ _id: { $in: parent.categories } });
       },
     },
   }),
@@ -566,7 +565,7 @@ const RootQuery = new GraphQLObjectType({
       },
       async resolve(parent, args) {
         const filterModel = JSON.parse(args.filterModel);
-        console.log("filterModel------------------", filterModel);
+
         const totalCount = await Lead.countDocuments();
 
         // find by categoryList
@@ -617,8 +616,10 @@ const RootQuery = new GraphQLObjectType({
           sortCriteria[args.column] = args.sort === "desc" ? -1 : 1;
         }
 
+        console.log("filterModel---------------------------------", filterModel);
         //-------- filter date by date range in filterModel and return leads in that date range and sort by date range and return leads
         if (filterModel?.operatorValue === "isRange" && filterModel?.type === "date") {
+          console.log("---------------------------------date");
           const response = await Lead.find({
             [filterModel?.columnField]: {
               $gte: new Date(filterModel?.from),
@@ -690,12 +691,12 @@ const RootQuery = new GraphQLObjectType({
           return { count: result.length, rows: result };
         }
 
+        //-------------------------------------------------------------------------------------------------------------
         // filter record by contains, equals, etc.
         const query = {};
-        console.log("before category----------------- ");
+
         // Filter records based on a field that contains a specific value
         if (filterModel?.operatorValue === "contains") {
-          console.log("filterModel?.columnField", filterModel?.columnField);
           query[filterModel?.columnField] = { $regex: `.*${filterModel?.value}.*`, $options: "i" };
         }
 
@@ -1457,11 +1458,7 @@ const mutation = new GraphQLObjectType({
           if (existingCategory) {
             throw new Error("Category already exists");
           }
-          const category = new Category({
-            // save category title in lowercase
-            title: args.title.toLowerCase(),
-            color: args.color,
-          });
+          const category = new Category(args);
           const result = await category.save();
           return result;
         } catch (error) {
@@ -1483,9 +1480,18 @@ const mutation = new GraphQLObjectType({
       },
       async resolve(parent, args) {
         try {
+          // find category by title to avoid duplicate category names with regex case insensitive
+
+          const existingCategory = await Category.findOne({
+            title: { $regex: new RegExp(args.title, "i") },
+          });
+          if (existingCategory) {
+            throw new Error("Category already exists");
+          }
+
           const category = await Category.findById(args.id);
           if (!category) throw new Error("Category not found");
-          category.title = args.title.toLowerCase();
+          category.title = args.title;
           category.color = args.color;
           const result = await category.save();
           return result;
@@ -1534,29 +1540,14 @@ const mutation = new GraphQLObjectType({
         // convert string to array
         const leads = JSON.parse(args.leads);
 
-        // leads have category title we need to find category id from database and save it to lead category field and then bulkWrite leads to database with upsert true to avoid duplicate leads use email and phone as unique fields
-        if (!leads.length) {
-          return { count: 0 };
-        }
-        const categories = await Category.find();
-        const bulkWrite = leads?.map((lead) => {
-          let category = null;
-          if (leads.category) {
-            category = categories.find(
-              (category) => category?.title?.toLowerCase() === lead?.category?.toLowerCase()
-            );
-          }
-          // if category not found then add new category to database
-          if (!category && lead.category) {
-            category = new Category({ title: lead.category });
-            category.save();
-          }
-
-          return {
+        if (leads.length) {
+          // use upsert data to save leads to database but upsertMany is not supported in mongoose
+          // so we need to use bulkWrite to save leads to database
+          const bulkWrite = leads.map((lead) => ({
             updateOne: {
               filter: {
-                email: lead.email,
-                phone: lead.phone,
+                email: lead.Emails,
+                phone: lead.Phones,
               },
               update: {
                 ...lead,
@@ -1571,48 +1562,15 @@ const mutation = new GraphQLObjectType({
                 GloballyOptedOutOfListingAgentEmail: lead.OptedOutOfListingAgentEmail,
                 GloballyOptedOutOfLenderEmail: lead.OptedOutOfLenderEmail,
                 GloballyOptedOutOfAlerts: lead.OptedOutOfeAlerts,
-                category: category?._id || null,
               },
               upsert: true,
             },
-          };
-        });
+          }));
 
-        // return upserted leads count
-        const response = await (await Lead.bulkWrite(bulkWrite)).result.nUpserted;
-        return { count: response };
-
-        // if (leads.length) {
-        //   // use upsert data to save leads to database but upsertMany is not supported in mongoose
-        //   // so we need to use bulkWrite to save leads to database
-        //   const bulkWrite = leads.map((lead) => ({
-        //     updateOne: {
-        //       filter: {
-        //         email: lead.Emails,
-        //         phone: lead.Phones,
-        //       },
-        //       update: {
-        //         ...lead,
-        //         firstName: lead.FirstName,
-        //         lastName: lead.LastName,
-        //         email: lead.Emails,
-        //         phone: lead.Phones,
-        //         phoneStatus: lead.PhoneStatus,
-        //         description: lead.Description,
-        //         emailInvalid: lead.EmailInvalid,
-        //         GloballyOptedOutOfBuyerAgentEmail: lead.OptedOutOfBuyerAgentEmail,
-        //         GloballyOptedOutOfListingAgentEmail: lead.OptedOutOfListingAgentEmail,
-        //         GloballyOptedOutOfLenderEmail: lead.OptedOutOfLenderEmail,
-        //         GloballyOptedOutOfAlerts: lead.OptedOutOfeAlerts,
-        //       },
-        //       upsert: true,
-        //     },
-        //   }));
-
-        //   // return upserted leads count
-        //   const response = await (await Lead.bulkWrite(bulkWrite)).result.nUpserted;
-        //   return { count: response };
-        // }
+          // return upserted leads count
+          const response = await (await Lead.bulkWrite(bulkWrite)).result.nUpserted;
+          return { count: response };
+        }
       },
     },
 
@@ -1701,18 +1659,18 @@ const mutation = new GraphQLObjectType({
         didAnniversaryDrip: { type: GraphQLString },
         didLeaveReview: { type: GraphQLString },
         didClosingGift: { type: GraphQLString },
-        category: { type: GraphQLID },
-        tags: { type: GraphQLList(GraphQLID) },
 
         // Add additional fields to update here
       },
       async resolve(parent, { id, ...params }) {
         try {
-          // if category is closed then update the BuyerAgentCategory to closed ListingAgentCategory to closed HomeClosingDate to today's date
-          if (params?.category === "closed") {
-            params.BuyerAgentCategory = "closed";
-            params.ListingAgentCategory = "closed";
-            params.HomeClosingDate = new Date().toLocaleDateString();
+          if (params.tagsList) {
+            // tags list has closed tag then update the BuyerAgentCategory to closed ListingAgentCategory to closed HomeClosingDate to today's date
+            if (params.tagsList.includes("closed")) {
+              params.BuyerAgentCategory = "closed";
+              params.ListingAgentCategory = "closed";
+              params.HomeClosingDate = new Date().toLocaleDateString();
+            }
           }
 
           let update = await Lead.findOneAndUpdate(
